@@ -1,0 +1,122 @@
+#AWS CLI
+#IAM
+
+#to create group
+aws iam create-group --group-name Test
+
+#add policy
+aws iam attach-group-policy --group-name Test --policy-arn arn:aws:iam::aws:policy/AdministratorAccess
+
+#to create user
+aws iam create-user --user-name ihar@test.com
+
+#to add user to the group
+aws iam add-user-to-group --user-name ihar@test.com --group-name Test
+
+#to create access key
+aws iam create-access-key --user-name ihar@test.com
+
+
+#EC2
+
+#to create image from instance
+aws ec2 create-image --instance-id i-0e8bda73e7e3105be --name "linux_img"
+
+#to get subnet for another zone(us-east-1b)
+aws ec2 describe-subnets --filters "Name=availabilityZone,Values=us-east-1a"
+
+#to create security group
+aws ec2 create-security-group --group-name Test --description "My security group"
+
+#to create an instance
+aws ec2 run-instances --image-id ami-97785bed \
+  --instance-type t2.micro --key-name test \
+  --subnet-id subnet-3935b516 --security-group-ids sg-4623c830 \
+  --user-data file://user_data.txt
+
+#to assign security group
+aws ec2 modify-instance-attribute --groups sg-4623c830 --instance-id i-074ba880299e7dd8f
+
+#to get information about instance
+aws ec2 describe-instances --instance-id i-0e8bda73e7e3105be
+
+#to create a tag
+aws ec2 create-tags --resources i-0e8bda73e7e3105be --tags Key=name,Value=az-b
+
+#to terminate instance 
+aws ec2 terminate-instances --instance-ids i-0e8bda73e7e3105be
+
+#to create key-pair
+aws ec2 create-key-pair --key-name test
+cat > test.pem <<EOF
+XXXX
+EOF
+chmod 400 test.pem
+
+#Elastic Load Balancing(ELB)
+
+#to create ELB
+aws elb create-load-balancer \
+  --load-balancer-name LB-test \
+  --listeners "Protocol=HTTP,LoadBalancerPort=80,InstanceProtocol=HTTP,InstancePort=80" \
+  --subnets "subnet-106a245b" "subnet-3935b516" \
+  --security-groups sg-4623c830
+
+#to register instance in ELB
+aws elb register-instances-with-load-balancer \
+  --load-balancer-name LB-test \
+  --instances i-0e8bda73e7e3105be
+
+#to create helth-check in ELB
+aws elb configure-health-check \
+  --load-balancer-name LB-test \
+  --health-check Target=HTTP:80/ping,Interval=30,UnhealthyThreshold=2,HealthyThreshold=2,Timeout=3
+
+#to delete ELB
+aws elb delete-load-balancer --load-balancer-name LB-test
+
+#Auto Scaling
+
+#to create a Launch Configuration
+aws autoscaling create-launch-configuration \
+  --launch-configuration-name AS-test \
+  --image-id ami-57b6432a \
+  --security-groups sg-4623c830 \
+  --instance-type t2.micro
+
+#to create an Auto Scaling Group
+aws autoscaling create-auto-scaling-group \
+  --auto-scaling-group-name ASG-test \
+  --launch-configuration-name AS-test \
+  --availability-zones "us-east-1a" "us-east-1b" \
+  --load-balancer-names "LB-test" \
+  --max-size 2 --min-size 1 --desired-capacity 1
+
+#to create scaling policies
+aws autoscaling put-scaling-policy \
+  --policy-name ASPolicy-test \
+  --auto-scaling-group-name ASG-test \
+  --scaling-adjustment 1 \
+  --adjustment-type ChangeInCapacity
+
+#to create Cloudwatch Alarms
+aws cloudwatch put-metric-alarm \
+  --alarm-name RequestCount-test \
+  --metric-name RequestCount \
+  --namespace AWS/ELB --statistic Sum --period 60 --threshold 10 \
+  --comparison-operator GreaterThanOrEqualToThreshold \
+  --dimensions "Name= LoadBalancerName,Value=LB-test" \
+  --evaluation-periods 2 \
+  --alarm-actions arn:aws:autoscaling:us-east-1:818789237428:scalingPolicy:d535efb8-1bf1-4af1-b785-7aad60226749:autoScalingGroupName/ASG-test:policyName/ASPolicy-test
+
+
+#CloudFormation
+
+#to create stack
+aws cloudformation create-stack --stack-name test --template-body file://stack.json
+
+#to delete stack
+aws cloudformation delete-stack --stack-name test
+
+aws cloudformation create-stack --stack-name test --template-body file://codedeploy.yaml --region us-east-1 --disable-rollback --capabilities="CAPABILITY_IAM"
+

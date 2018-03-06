@@ -1,0 +1,276 @@
+Description: A sample AWS CodeDeploy blue/green deployment
+AWSTemplateFormatVersion: 2010-09-09
+Parameters:
+  LoadBalancerName:
+    Description: The name of the load balancer.
+    Type: String
+    Default: LB
+  ServiceRoleName:
+    Description: The name of the service role.
+    Type: String
+    Default: TestServiceRoleName
+  KeyPairName:
+    Description: Name of an existing Amazon EC2 key pair.
+    Type: String
+    Default: test
+  InstanceCount:
+    Description: Number of Amazon EC2 instances in an autoscaling group.
+    Type: Number
+    Default: '1'
+  SSHLocation:
+    Description: The IP address range that can be used to connect using SSH.
+    Type: String
+    Default: 0.0.0.0/0
+  ImageId:
+    Type: 'AWS::EC2::Image::Id'
+    Description: AMI image id
+    Default: ami-97785bed
+Resources:
+  WaitHandle:
+    Type: 'AWS::CloudFormation::WaitConditionHandle'
+  WaitCondition:
+    Type: 'AWS::CloudFormation::WaitCondition'
+    Properties:
+      Count: !Ref InstanceCount
+      Handle: !Ref WaitHandle
+      Timeout: '1800'
+  CodeDeployTrustRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: '1'
+            Effect: Allow
+            Principal:
+              Service: codedeploy.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Path: /
+      RoleName: !Ref ServiceRoleName
+  CodeDeployRolePolicies:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: CodeDeployPolicy
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Resource:
+              - '*'
+            Action:
+              - 'ec2:Describe*'
+              - 'ec2:TerminateInstances'
+          - Effect: Allow
+            Resource:
+              - '*'
+            Action:
+              - 'autoscaling:*'
+          - Effect: Allow
+            Resource:
+              - '*'
+            Action:
+              - 'elasticloadbalancing:DescribeLoadBalancers'
+              - 'elasticloadbalancing:DescribeInstanceHealth'
+              - 'elasticloadbalancing:RegisterInstancesWithLoadBalancer'
+              - 'elasticloadbalancing:DeregisterInstancesFromLoadBalancer'
+          - Effect: Allow
+            Resource:
+              - '*'
+            Action:
+              - 'Tag:getResources'
+              - 'Tag:getTags'
+              - 'Tag:getTagsForResource'
+              - 'Tag:getTagsForResourceList'
+      Roles:
+        - !Ref CodeDeployTrustRole
+  InstanceRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+  InstanceRolePolicies:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: InstanceRole
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action:
+              - 'autoscaling:Describe*'
+              - 'cloudformation:Describe*'
+              - 'cloudformation:GetTemplate'
+              - 's3:Get*'
+            Resource: '*'
+      Roles:
+        - !Ref InstanceRole
+  InstanceRoleInstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    Properties:
+      Path: /
+      Roles:
+        - !Ref InstanceRole
+  VPC:
+    Type: 'AWS::EC2::VPC'
+    Properties:
+      CidrBlock: 172.31.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      InstanceTenancy: default
+      Tags:
+        - Key: Name
+          Value: !Ref 'AWS::StackName'
+  InternetGateway:
+    Type: 'AWS::EC2::InternetGateway'
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Ref 'AWS::StackName'
+  AttachGateway:
+    Type: 'AWS::EC2::VPCGatewayAttachment'
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+  PublicSubnet:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 172.31.0.0/24
+      MapPublicIpOnLaunch: 'true'
+      Tags:
+        - Key: Name
+          Value: !Ref 'AWS::StackName'
+  PublicRouteTable:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Ref 'AWS::StackName'
+  PublicRoute:
+    Type: 'AWS::EC2::Route'
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  PublicSubnetRouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet
+  SecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Enable HTTP access via port 80 and SSH access.
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp: !Ref SSHLocation
+  ClassicLoadBalancer:
+    Type: 'AWS::ElasticLoadBalancing::LoadBalancer'
+    Properties:
+      LoadBalancerName: !Ref LoadBalancerName
+      Subnets:
+        - !Ref PublicSubnet
+      Listeners:
+        - LoadBalancerPort: '80'
+          InstancePort: '80'
+          Protocol: HTTP
+      HealthCheck:
+        Target: 'HTTP:80/'
+        HealthyThreshold: '2'
+        UnhealthyThreshold: '5'
+        Interval: '10'
+        Timeout: '5'
+      SecurityGroups:
+        - !Ref SecurityGroup
+  BlueGreenLaunchConfiguration:
+    Type: 'AWS::AutoScaling::LaunchConfiguration'
+    Properties:
+      IamInstanceProfile: !Ref InstanceRoleInstanceProfile
+      ImageId: !Ref ImageId
+      InstanceType: t2.micro
+      KeyName: !Ref KeyPairName
+      SecurityGroups:
+        - !Ref SecurityGroup
+      UserData: !Base64 
+        'Fn::Join':
+          - ''
+          - - |
+              #!/bin/bash -ex
+            - |
+              yum install -y aws-cfn-bootstrap
+            - |
+              yum install -y ruby
+            - |
+              yum install -y aws-cli
+            - |
+              # Helper function.
+            - |
+              function error_exit
+            - |
+              {
+            - '  /opt/aws/bin/cfn-signal -e 1 -r "$1" '''
+            - !Ref WaitHandle
+            - |
+              '
+            - |2
+                exit 1
+            - |
+              }
+            - |
+              # Install the AWS CodeDeploy Agent.
+            - |
+              cd /home/ec2-user/
+            - >
+              aws configure set default.s3.signature_version s3v4 || error_exit
+              'Failed to set aws cli signature to version 4'
+            - >
+              aws s3 cp
+              's3://aws-codedeploy-us-east-1/latest/codedeploy-agent.noarch.rpm'
+              . --region us-east-1 || error_exit 'Failed to download AWS
+              CodeDeploy Agent.'
+            - >
+              yum -y install codedeploy-agent.noarch.rpm || error_exit 'Failed
+              to install AWS CodeDeploy Agent.' 
+            - |
+              # All is well, so signal success.
+            - >-
+              /opt/aws/bin/cfn-signal -e 0 -r "AWS CodeDeploy Agent setup
+              complete." '
+            - !Ref WaitHandle
+            - |
+              '
+  BlueGreenAutoScalingGroup:
+    Type: 'AWS::AutoScaling::AutoScalingGroup'
+    Properties:
+      LaunchConfigurationName: !Ref BlueGreenLaunchConfiguration
+      LoadBalancerNames:
+        - !Ref ClassicLoadBalancer
+      MaxSize: !Ref InstanceCount
+      MinSize: !Ref InstanceCount
+      DesiredCapacity: !Ref InstanceCount
+      VPCZoneIdentifier:
+        - !Ref PublicSubnet
+Outputs:
+  ServiceRoleName:
+    Value: !Ref CodeDeployTrustRole
+  ServiceRoleARN:
+    Value: !GetAtt 
+      - CodeDeployTrustRole
+      - Arn
+  AutoScalingGroupName:
+    Value: !Ref BlueGreenAutoScalingGroup
+  LoadBalancerName:
+    Value: !Ref ClassicLoadBalancer
