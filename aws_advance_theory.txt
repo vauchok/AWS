@@ -1,0 +1,31 @@
+#AWS
+#CloudFormation Helper Scripts Reference
+
+#cfn-hup
+cfn-hup -  helper is a daemon that detects changes in resource metadata
+and runs user-specified actions when a change is detected. This allows
+you to make configuration updates on your running Amazon EC2 instances
+through the UpdateStack API action.
+
+cfn-hup.conf - stores the name of the stack and the AWS credentials
+that the cfn-hup daemon targets.
+#example
+cat > /etc/cfn/cfn-hup.conf <<EOF
+[main]
+stack=${AWS::StackId}
+region=${AWS::Region}
+interval=1
+EOF
+
+hooks.conf - stores the user actions that the cfn-hup daemon calls
+periodically.
+#example
+cat > /etc/cfn/hooks.d/cfn-auto-reloader.conf <<EOF
+[cfn-auto-reloader-hook]
+triggers=post.update
+path=Resources.Server.Metadata.AWS::CloudFormation::Init
+action=/opt/aws/bin/cfn-init -v --stack ${AWS::StackId} --region ${AWS::Region} --resource Server
+runas=root
+EOF
+
+cfn-init, cfn-signal, cfn-get-metadata, cfn-hup 
